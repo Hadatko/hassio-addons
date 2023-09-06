@@ -1,20 +1,23 @@
-ARG BUILD_FROM
-FROM $BUILD_FROM
+# STAGE 1 - Copy
+FROM alpine:3.18.3 as orig
 
-LABEL João Loureiro <joaofl@gmail.com>
+RUN apk add git
 
-# Set shell
+RUN git clone https://github.com/Hadatko/hassio-addons.git
 
-ENV LANG C.UTF-8
+# STAGE 2 - Final
+FROM alpine:3.18.3
 
-# Install requirements for add-on
-RUN apk update && apk add --no-cache bash python3 py3-pip  && \
+WORKDIR /
+
+RUN apk update && apk add --no-cache bash python3 py3-pip bash  && \
                             rm -rf /var/cache/apk/*
+RUN pip3 install --no-cache paho-mqtt
 
-RUN pip3 install paho-mqtt
+RUN mkdir -p /opt/telegraf2hassio
 
-COPY source/* /opt/telegraf2hassio/
-COPY run.sh /
-RUN chmod a+x /run.sh
+COPY --from=orig /hassio-addons/telegraf2hassio/source /opt/telegraf2hassio/
+COPY --from=orig /hassio-addons/telegraf2hassio/run.sh /opt/telegraf2hassio/
+RUN chmod a+x /opt/telegraf2hassio/run.sh
 
-CMD [ "/run.sh" ]
+CMD ["bash", "-c","/opt/telegraf2hassio/run.sh"]

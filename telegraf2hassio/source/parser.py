@@ -40,11 +40,11 @@ class calc_measurement():
 
 
 class telegraf_parser():
-    def __init__(self, transmit_callback, cm_str_list) -> None:
+    def __init__(self, transmit_callback, cm_str_list, plugin) -> None:
         self.hosts = {}
         self.cm_dict = {}
         self.transmit_callback = transmit_callback
-
+        self.plugin=plugin
 
         for uid in cm_str_list.split(","):
             # Initialize a dict with the desired calculated values UIDs
@@ -59,15 +59,20 @@ class telegraf_parser():
         sensor_name = jdata['name']
 
         # Use properties names to differentiate measurements with same name
-        if len(jdata['tags']) > 1: 
-            sensor_name += ('_' + jdata['tags'].get('device', "")).rstrip("_")
-            sensor_name += ('_' + jdata['tags'].get('interface', "")).rstrip("_")
-            sensor_name += ('_' + jdata['tags'].get('feature', "")).rstrip("_")
+        if len(jdata['tags']) > 1:
+            if self.plugin == "docker":
+                sensor_name += ('_' + jdata["tags"].get("container_name","")).rstrip("_")
+                #TODO:append container sha similar to uid bellow? But when container is recreated it has new id
+            else:
+                sensor_name += ('_' + jdata['tags'].get('device', "")).rstrip("_")
+                sensor_name += ('_' + jdata['tags'].get('interface', "")).rstrip("_")
+                sensor_name += ('_' + jdata['tags'].get('feature', "")).rstrip("_")
 
-        # Append this unique suffix to differ same-sensor-named topics
-        # that contain different tags, that confuse hassio
-        uid = hashlib.sha1(str(self.jdata_recv['fields'].keys()).encode()).hexdigest()[0:2]
-        sensor_name += f"_{uid}"
+
+                # Append this unique suffix to differ same-sensor-named topics
+                # that contain different tags, that confuse hassio
+                uid = hashlib.sha1(str(self.jdata_recv['fields'].keys()).encode()).hexdigest()[0:2]
+                sensor_name += f"_{uid}"
 
         return sensor_name
 
@@ -78,7 +83,13 @@ class telegraf_parser():
             return f"{host_name}_{sensor_name}_{measurement_name}"
 
     def __get_measurements_list(self, jdata):
-        return jdata['fields'].keys()
+        keys = list(jdata['fields'].keys())
+        retVal=[]
+        #TODO: convert string numbers to number?
+        for k in keys:
+            if isinstance(jdata['fields'][k], (int, float)):
+                retVal.append(k)
+        return retVal
 
     def add_calc(self, jdata_o):
         jdata = deepcopy(jdata_o)
@@ -103,10 +114,12 @@ class telegraf_parser():
         current_host, is_new_h = self.add_host(host_name)
         # Add unknown sensors to host
         current_sensor, is_new_s = current_host.add_sensor(sensor_name)
-        # Add unknown measurements to each sensor 
+
+        is_new_m=False
+        # Add unknown measurements to each sensor
         for measurement_name in self.__get_measurements_list(jdata):
-            _, is_new_m = current_sensor.add_measurement(measurement_name)
-            
+            _, is_new_m = current_sensor.add_measurement(measurement_name, self.plugin)
+
             if is_new_m:
                 uid = self.__get_unique_id(jdata, measurement_name)
                 logging.info(f"Added measurement UID: {uid}")
@@ -143,7 +156,7 @@ class telegraf_parser():
             measurements += f"{measurement},"
         measurements = measurements.rstrip(",")
 
-        return f"{STATE_PREFIX}/{host_name}/{sensor_name}/[{measurements}]" 
+        return f"{STATE_PREFIX}/{host_name}/{sensor_name}/[{measurements}]"
 
     def add_host(self, host_name):
         current_host = self.hosts.get(host_name)
@@ -184,25 +197,31 @@ class sensor():
         self.measurements = {}
         self.parent_host = parent_host
 
-    def add_measurement(self, measurement_name):
+    def add_measurement(self, measurement_name, plugin):
         current_measurement = self.measurements.get(measurement_name)
         if current_measurement is None:
-            current_measurement = measurement(self, measurement_name)
+            current_measurement = measurement(self, measurement_name, plugin=plugin)
             self.measurements[measurement_name] = current_measurement
             return current_measurement, True
-        
+
         return current_measurement, False
 
-class measurement():    
-    def __init__(self, parent_sensor, name) -> None:
+class measurement():
+    def __init__(self, parent_sensor, name, plugin) -> None:
         self.name = name
         self.parent_sensor = parent_sensor
         self.topic = f"{HA_PREFIX}/{self.parent_sensor.parent_host.name}/{self.parent_sensor.name}_{self.name}"
         self.uid = f"{self.parent_sensor.parent_host.name}_{self.parent_sensor.name}_{self.name}"
 
+        if plugin == "docker":
+            cfgName =self.parent_sensor.name
+        else:
+            cfgName =self.parent_sensor.name[0:-3]
+        cfgName =f"{self.parent_sensor.parent_host.name}_{cfgName}_{self.name}"
+
         config_payload = {
             # "~": self.topic,
-            "name": f"{self.parent_sensor.parent_host.name}_{self.parent_sensor.name[0:-3]}_{self.name}",
+            "name": cfgName,
             "state_topic": f"{STATE_PREFIX}/{self.parent_sensor.parent_host.name}/{self.parent_sensor.name}/data",
             "unit_of_measurement": "",
             "device": self.parent_sensor.parent_host.info,

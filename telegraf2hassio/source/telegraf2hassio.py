@@ -37,6 +37,7 @@ all_args.add_argument("--pass", required=False)
 all_args.add_argument("--broker-ip", required=False, default="192.168.1.5")
 all_args.add_argument("--port", required=False, default=1883)
 all_args.add_argument("--topic", required=False, default="telegraf/#")
+all_args.add_argument("--plugin", required=False, default=None)
 all_args.add_argument("--calc", required=False, default="")
 all_args.add_argument("--log-level", required=False, default="info")
 
@@ -55,7 +56,7 @@ client.subscribe(args['topic'])
 
 # Pass the data transmit callback and the list of
 # values to calculate
-tp = telegraf_parser(data_transmit, args['calc'])
+tp = telegraf_parser(data_transmit, args['calc'], args['plugin'])
 
 logging.info("Setup finished")
 
