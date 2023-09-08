@@ -54,6 +54,13 @@ class telegraf_parser():
         # Build the host name of the current meassage
         return jdata['tags']['host']
 
+    def __get_sensor_group_name(self, jdata):
+        sensor_name=""
+        if self.plugin == "docker":
+            if len(jdata['tags']) > 1:
+                sensor_name = jdata["tags"].get("container_name","")
+        return sensor_name
+
     def __get_sensor_name(self, jdata):
         # Build up the sensor name
         sensor_name = jdata['name']
@@ -109,11 +116,11 @@ class telegraf_parser():
         return jdata
 
 
-    def announce_new(self, host_name, sensor_name, jdata) -> int:
+    def announce_new(self, host_name, sensor_group_name, sensor_name, jdata) -> int:
         # Add current host if unknown
         current_host, is_new_h = self.add_host(host_name)
         # Add unknown sensors to host
-        current_sensor, is_new_s = current_host.add_sensor(sensor_name)
+        current_sensor, is_new_s = current_host.add_sensor(sensor_group_name, sensor_name)
 
         is_new_m=False
         # Add unknown measurements to each sensor
@@ -134,8 +141,9 @@ class telegraf_parser():
 
         host_name = self.__get_host_name(jdata)
         sensor_name = self.__get_sensor_name(jdata)
+        sensor_group_name = self.__get_sensor_group_name(jdata)
 
-        is_new = self.announce_new(host_name, sensor_name, jdata)
+        is_new = self.announce_new(host_name, sensor_group_name, sensor_name, jdata)
 
         topic_data = f"{STATE_PREFIX}/{host_name}/{sensor_name}/data"
 
@@ -180,11 +188,11 @@ class host():
         self.info["sw_version"] = VERSION
         self.info["manufacturer"] = "telegraf2ha"
 
-    def add_sensor(self, sensor_name):
+    def add_sensor(self, sensor_group_name, sensor_name):
         # To create the sensor name, also check for extra tags (for the case of disks for example)
         current_sensor = self.sensors.get(sensor_name)
         if current_sensor is None:
-            current_sensor = sensor(self, sensor_name)
+            current_sensor = sensor(self, sensor_group_name, sensor_name)
             self.sensors[sensor_name] = current_sensor
             return current_sensor, True
 
@@ -192,7 +200,8 @@ class host():
 
 
 class sensor():
-    def __init__(self, parent_host, name) -> None:
+    def __init__(self, parent_host, group_name, name) -> None:
+        self.group_name = group_name
         self.name = name
         self.measurements = {}
         self.parent_host = parent_host
@@ -218,13 +227,17 @@ class measurement():
         else:
             cfgName =self.parent_sensor.name[0:-3]
         cfgName =f"{self.parent_sensor.parent_host.name}_{cfgName}_{self.name}"
+        info = deepcopy(self.parent_sensor.parent_host.info)
+        if self.parent_sensor.group_name != "":
+            info["identifiers"]+= "_"+self.parent_sensor.group_name
+            info["name"]+= "_"+self.parent_sensor.group_name
 
         config_payload = {
             # "~": self.topic,
             "name": cfgName,
             "state_topic": f"{STATE_PREFIX}/{self.parent_sensor.parent_host.name}/{self.parent_sensor.name}/data",
             "unit_of_measurement": "",
-            "device": self.parent_sensor.parent_host.info,
+            "device": info,
             "unique_id": self.uid,
             "platform": "mqtt",
             # Make the template such that we can use the telegraph topic straight
